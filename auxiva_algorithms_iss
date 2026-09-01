@@ -1,0 +1,184 @@
+% ---------------------------------------------------------------------------
+% auxiva_algorithms.tex
+%
+% Pseudocode for online AuxIVA-ISS and online AuxIVA-IP, matching the
+% implementations in online_auxiva_iss.py and online_auxiva_ip.py.
+%
+% Differs from Algorithm 1 of Nakashima & Ono (arXiv:2209.00937) in one
+% respect: the covariance recursion is written explicitly against the
+% previous FRAME's covariance U_{kf,t-1} rather than the running iterate,
+% via the snapshot \widetilde{U}. The paper's listing is ambiguous on this
+% point; anchoring to the iterate would give an effective forgetting factor
+% of \alpha^{N_iter} and inject x x^H once per sweep.
+%
+% Preamble requirements: algorithm, algpseudocode, amsmath, amssymb, bm.
+% Compiles standalone as-is (pdflatex).
+% ---------------------------------------------------------------------------
+
+\documentclass[10pt,twocolumn]{article}
+
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{bm}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage[margin=2cm]{geometry}
+
+% Comment style: right-aligned, small, in a lighter face.
+\algrenewcommand{\algorithmiccomment}[1]{\hfill\footnotesize$\triangleright$~#1}
+
+% Shorthands
+\newcommand{\Wf}{\bm{W}_{f}}
+\newcommand{\Uf}{\bm{U}}
+\newcommand{\xft}{\bm{x}_{ft}}
+\newcommand{\yft}{\bm{y}_{ft}}
+\newcommand{\wkf}{\bm{w}_{kf}}
+\newcommand{\vkf}{\bm{v}_{kf}}
+\newcommand{\herm}{^{\mathsf{H}}}
+
+\begin{document}
+
+\section*{Notation}
+
+\noindent
+$K$ sources and microphones, $F$ frequency bins, $t$ the frame index.
+$\xft \in \mathbb{C}^{K}$ is the observed frame, $\Wf \in \mathbb{C}^{K \times K}$
+the demixing matrix with rows $\wkf\herm$, and $\yft = \Wf \xft$ the separated
+frame. $\bm{U}_{kf} \in \mathbb{C}^{K \times K}$ is the weighted covariance of
+source $k$, $\alpha \in [0,1)$ the forgetting factor, $N_{\mathrm{iter}}$ the
+number of sweeps per frame, and $\bm{e}_{k}$ the $k$th canonical basis vector.
+$\mathcal{I}_{t} \subseteq \{1,\dots,K\}$ is the set of source indices updated
+at frame $t$: all of them before convergence, and only the moving sources
+afterwards.
+
+The source model enters through the weighting function
+\begin{equation}
+  \varphi(r) =
+  \begin{cases}
+    1/(2r), & \text{spherical Laplace},\\[2pt]
+    F/r^{2}, & \text{time-varying Gaussian},
+  \end{cases}
+  \label{eq:phi}
+\end{equation}
+evaluated at $r_{kt} = \bigl(\sum_{f} |\wkf\herm \xft|^{2}\bigr)^{1/2}$.
+
+% ---------------------------------------------------------------------------
+\begin{algorithm}[t]
+\caption{Online AuxIVA-ISS}
+\label{alg:iss}
+\begin{algorithmic}[1]
+\Require observed frames $\xft$; sweeps $N_{\mathrm{iter}}$; forgetting factor
+         $\alpha$; initial $\bm{W}_{f0}$, $\bm{U}_{kf0}$
+\Ensure  separated frames $\yft$
+\For{$t = 1, \dots, T$}
+  \State $\Wf \gets \bm{W}_{f(t-1)}$ \quad $(\forall f)$
+  \State $\widetilde{\bm{U}}_{kf} \gets \bm{U}_{kf(t-1)}$ \quad $(\forall k, f)$
+         \Comment{anchor for \eqref{eq:cov}}
+  \For{$\mathrm{iter} = 1, \dots, N_{\mathrm{iter}}$}
+    \For{$k = 1, \dots, K$}
+      \Comment{all $k$: covariances are shared state}
+      \State $r_{kt} \gets \bigl(\sum_{f} |\wkf\herm \xft|^{2}\bigr)^{1/2}$
+      \State $\bm{U}_{kf} \gets \alpha \widetilde{\bm{U}}_{kf}
+              + (1-\alpha)\, \varphi(r_{kt})\, \xft \xft\herm$
+              \quad $(\forall f)$
+    \EndFor
+    \For{$k \in \mathcal{I}_{t}$}
+      \State $\bm{p}_{f} \gets \wkf\herm$ \quad $(\forall f)$
+             \Comment{snapshot: row $k$ before the update}
+      \For{$m = 1, \dots, K$}
+        \If{$m \neq k$}
+          \State $v_{mkf} \gets \dfrac{\bm{w}_{mf}\herm \bm{U}_{mf} \wkf}
+                                      {\wkf\herm \bm{U}_{mf} \wkf}$
+                 \quad $(\forall f)$
+        \Else
+          \State $v_{kkf} \gets 1 - \bigl(\wkf\herm \bm{U}_{kf} \wkf\bigr)^{-1/2}$
+                 \quad $(\forall f)$
+        \EndIf
+        \State $\bm{w}_{mf}\herm \gets \bm{w}_{mf}\herm - v_{mkf}\, \bm{p}_{f}$
+               \quad $(\forall f)$
+      \EndFor
+    \EndFor
+  \EndFor
+  \State $\yft \gets \Wf \xft$ \quad $(\forall f)$
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+% ---------------------------------------------------------------------------
+\begin{algorithm}[t]
+\caption{Online AuxIVA-IP (baseline)}
+\label{alg:ip}
+\begin{algorithmic}[1]
+\Require observed frames $\xft$; sweeps $N_{\mathrm{iter}}$; forgetting factor
+         $\alpha$; initial $\bm{W}_{f0}$, $\bm{U}_{kf0}$
+\Ensure  separated frames $\yft$
+\For{$t = 1, \dots, T$}
+  \State $\Wf \gets \bm{W}_{f(t-1)}$ \quad $(\forall f)$
+  \State $\widetilde{\bm{U}}_{kf} \gets \bm{U}_{kf(t-1)}$ \quad $(\forall k, f)$
+  \For{$\mathrm{iter} = 1, \dots, N_{\mathrm{iter}}$}
+    \For{$k = 1, \dots, K$}
+      \State $r_{kt} \gets \bigl(\sum_{f} |\wkf\herm \xft|^{2}\bigr)^{1/2}$
+      \State $\bm{U}_{kf} \gets \alpha \widetilde{\bm{U}}_{kf}
+              + (1-\alpha)\, \varphi(r_{kt})\, \xft \xft\herm$
+              \quad $(\forall f)$
+    \EndFor
+    \For{$k \in \mathcal{I}_{t}$}
+      \State $\wkf \gets \bigl(\Wf \bm{U}_{kf}\bigr)^{-1} \bm{e}_{k}$
+             \quad $(\forall f)$
+             \Comment{$O(K^{3})$ solve}
+      \State $\wkf \gets \wkf \big/ \bigl(\wkf\herm \bm{U}_{kf} \wkf\bigr)^{1/2}$
+             \quad $(\forall f)$
+    \EndFor
+  \EndFor
+  \State $\yft \gets \Wf \xft$ \quad $(\forall f)$
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+% ---------------------------------------------------------------------------
+\section*{Remarks}
+
+\paragraph{Snapshot semantics.}
+Line~3 of both algorithms caches $\bm{U}_{kf(t-1)}$ before the sweep loop, and
+the recursion
+\begin{equation}
+  \bm{U}_{kft} = \alpha \bm{U}_{kf(t-1)}
+                 + (1-\alpha)\, \varphi(r_{kt})\, \xft \xft\herm
+  \label{eq:cov}
+\end{equation}
+is rebuilt from that snapshot on every sweep. Only $r_{kt}$ is refreshed
+between sweeps, which is the purpose of the inner loop; the decay is applied
+once per frame.
+
+\paragraph{Snapshot of row $k$ in Algorithm~\ref{alg:iss}.}
+Line~11 caches $\wkf\herm$ before the $m$-loop so that all $K$ rank-one updates
+within one $k$-step use the pre-update row, matching the simultaneous form
+$\Wf \gets \Wf - \vkf \wkf\herm$. Since $v_{mkf}$ reads row $m$, which the loop
+has not yet written, the sequential in-place updates are equivalent to the
+simultaneous one.
+
+\paragraph{Why $\mathcal{I}_{t}$ works for ISS but not IP.}
+The ISS update is equivalent to updating the steering vector $\bm{a}_{kf}$, a
+\emph{column} of the mixing matrix:
+\begin{equation}
+  \bm{a}_{kf} + \bm{u}_{kf}
+  = \frac{1}{1 - v_{kkf}}
+    \Bigl( \bm{a}_{kf} + \sum_{m \neq k} v_{mkf} \bm{a}_{mf} \Bigr).
+  \label{eq:steering}
+\end{equation}
+When one source moves, exactly one column of $\bm{A}_{ft}$ goes stale, so
+restricting $\mathcal{I}_{t}$ to that index repairs precisely what changed. IP
+updates a \emph{row} of $\Wf$, and no row-wise operation corrects a single
+column of $\bm{A}_{ft}$; a restricted IP update therefore reduces cost but
+cannot track. The covariance loop stays over all $k$ in both algorithms,
+since $\bm{U}_{mf}$ for $m \neq k$ appears in the denominators of
+\eqref{eq:steering}'s coefficients.
+
+\paragraph{Cost.}
+Per frame, the covariance update is $O(N_{\mathrm{iter}} K^{2} F)$ per source
+and is identical in both algorithms. The demixing update is
+$O(|\mathcal{I}_{t}| K^{2} F)$ for ISS against $O(|\mathcal{I}_{t}| K^{3} F)$
+for IP, so any complexity advantage lives entirely in the second phase and is
+best measured there rather than in end-to-end runtime.
+
+\end{document}
